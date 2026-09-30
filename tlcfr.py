@@ -66,20 +66,21 @@ class VimeoExtractor:
             print("[-] Konfigürasyon verilerine ulaşılamadı. Video yayından kalkmış, şifreli veya coğrafi kısıtlı olabilir.")
             return None
 
-        # HLS (m3u8) adresini JSON içerisinden ayıkla (json_url öncelikli)
+        # HLS (m3u8) adresini JSON içerisinden ayıkla (Önce akamai_live altındaki json_url aranır)
         try:
             cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
-            for cdn_name, cdn_info in cdns.items():
-                json_url = cdn_info.get("json_url")
+            
+            # En başta akamai_live içinden json_url arama
+            if "akamai_live" in cdns:
+                json_url = cdns["akamai_live"].get("json_url")
                 if json_url:
                     json_url = re.sub(r'\.\.\.', '', json_url)
-                    print(f"[*] json_url bulundu ({cdn_name}), içerik indiriliyor...")
+                    print(f"[*] akamai_live altından json_url bulundu, içerik indiriliyor...")
                     
                     m3u8_response = self.session.get(json_url, headers={"Referer": self.url}, timeout=10)
                     if m3u8_response.status_code == 200:
                         m3u8_json_content = m3u8_response.json()
                         
-                        # m3u8_json_content içerisinden url arama
                         m3u8_url = m3u8_json_content.get("url") or m3u8_json_content.get("hls_url")
                         if not m3u8_url and isinstance(m3u8_json_content, dict):
                             for k, v in m3u8_json_content.items():
@@ -92,24 +93,25 @@ class VimeoExtractor:
                             print(f"[+] Başarılı! m3u8_url json_url içeriğinden yakalandı.")
                             return m3u8_url
 
-                # Eğer json_url yoksa veya başarısızsa standart 'url' alanına bak
-                hls_url = cdn_info.get("url")
+            # Bulunamazsa diğer CDN ve URL'leri tara
+            for cdn_name, cdn_info in cdns.items():
+                hls_url = cdn_info.get("json_url") or cdn_info.get("url")
                 if hls_url:
                     hls_url = re.sub(r'\.\.\.', '', hls_url)
-                    print(f"[+] Başarılı! CDN (url): {cdn_name}")
+                    print(f"[+] Başarılı! CDN: {cdn_name}")
                     return hls_url
-                    
         except Exception as e:
             print(f"[-] HLS verisi işlenirken hata oluştu: {e}")
 
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """re.sub ile '...' kalıntılarını boşluk bırakmadan temizler, 
-           master veya tekil kalite yapılarına göre base_url türetir, 
-           gerekirse query parametrelerini ekler."""
+        """re.sub ile '...' kalıntılarını ve gereksiz '../' yol çıkışlarını temizler, 
+           master veya tekil kalite yapılarına göre base_url türetir."""
         
         hls_url = re.sub(r'\.\.\.', '', hls_url)
+        hls_url = re.sub(r'/[^/]+/\.\./', '/', hls_url)
+        
         parsed_hls = urlparse(hls_url)
         query_string = parsed_hls.query
         
@@ -138,14 +140,17 @@ class VimeoExtractor:
             if not line:
                 continue
             
-            # İçerikteki '...' ifadelerini boşluk bırakmadan tamamen sil
+            # re.sub ile '...' ve gereksiz '../' kalıntılarını tamamen temizle
             line = re.sub(r'\.\.\.', '', line)
+            line = re.sub(r'/[^/]+/\.\./', '/', line)
             
             if line.startswith("#"):
                 if 'URI="' in line:
                     def replace_uri(match):
                         uri_val = match.group(1)
                         uri_val = re.sub(r'\.\.\.', '', uri_val)
+                        uri_val = re.sub(r'/[^/]+/\.\./', '/', uri_val)
+                        
                         if not uri_val.startswith(("http://", "https://")):
                             uri_val = base_url + uri_val
                         
