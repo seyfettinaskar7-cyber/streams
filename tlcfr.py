@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 import requests
 
 class VimeoExtractor:
@@ -16,6 +16,25 @@ class VimeoExtractor:
             "Origin": "https://vimeo.com",
             "Sec-GPC": "1"
         })
+
+    def _clean_url(self, url: str) -> str:
+        """URL yolundaki '../' kalıntılarını imza ve token yapılarını bozmadan güvenle temizler."""
+        url = re.sub(r'\.\.\.', '', url)
+        parsed = urlparse(url)
+        segments = parsed.path.split('/')
+        new_segments = []
+        for seg in segments:
+            if seg == '..':
+                if new_segments:
+                    new_segments.pop()
+            elif seg != '.':
+                new_segments.append(seg)
+        
+        new_path = '/'.join(new_segments)
+        if not new_path.startswith('/'):
+            new_path = '/' + new_path
+            
+        return urlunparse((parsed.scheme, parsed.netloc, new_path, parsed.params, parsed.query, parsed.fragment))
 
     def extract(self):
         print(f"[*] İşleniyor: {self.url}")
@@ -70,11 +89,10 @@ class VimeoExtractor:
         try:
             cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
             
-            # En başta akamai_live içinden json_url arama
             if "akamai_live" in cdns:
                 json_url = cdns["akamai_live"].get("json_url")
                 if json_url:
-                    json_url = re.sub(r'\.\.\.', '', json_url)
+                    json_url = self._clean_url(json_url)
                     print(f"[*] akamai_live altından json_url bulundu, içerik indiriliyor...")
                     
                     m3u8_response = self.session.get(json_url, headers={"Referer": self.url}, timeout=10)
@@ -89,15 +107,14 @@ class VimeoExtractor:
                                     break
                         
                         if m3u8_url:
-                            m3u8_url = re.sub(r'\.\.\.', '', m3u8_url)
+                            m3u8_url = self._clean_url(m3u8_url)
                             print(f"[+] Başarılı! m3u8_url json_url içeriğinden yakalandı.")
                             return m3u8_url
 
-            # Bulunamazsa diğer CDN ve URL'leri tara
             for cdn_name, cdn_info in cdns.items():
                 hls_url = cdn_info.get("json_url") or cdn_info.get("url")
                 if hls_url:
-                    hls_url = re.sub(r'\.\.\.', '', hls_url)
+                    hls_url = self._clean_url(hls_url)
                     print(f"[+] Başarılı! CDN: {cdn_name}")
                     return hls_url
         except Exception as e:
@@ -106,12 +123,9 @@ class VimeoExtractor:
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """re.sub ile '...' kalıntılarını ve gereksiz '../' yol çıkışlarını temizler, 
-           master veya tekil kalite yapılarına göre base_url türetir."""
+        """M3U8 içeriğindeki tüm linkleri temizler, ../ kalıntılarını çözer ve base_url uygular."""
         
-        hls_url = re.sub(r'\.\.\.', '', hls_url)
-        hls_url = re.sub(r'/[^/]+/\.\./', '/', hls_url)
-        
+        hls_url = self._clean_url(hls_url)
         parsed_hls = urlparse(hls_url)
         query_string = parsed_hls.query
         
@@ -140,16 +154,14 @@ class VimeoExtractor:
             if not line:
                 continue
             
-            # re.sub ile '...' ve gereksiz '../' kalıntılarını tamamen temizle
-            line = re.sub(r'\.\.\.', '', line)
-            line = re.sub(r'/[^/]+/\.\./', '/', line)
+            # Satırdaki ../ ve ... kalıntılarını güvenle temizle
+            line = self._clean_url(line)
             
             if line.startswith("#"):
                 if 'URI="' in line:
                     def replace_uri(match):
                         uri_val = match.group(1)
-                        uri_val = re.sub(r'\.\.\.', '', uri_val)
-                        uri_val = re.sub(r'/[^/]+/\.\./', '/', uri_val)
+                        uri_val = self._clean_url(uri_val)
                         
                         if not uri_val.startswith(("http://", "https://")):
                             uri_val = base_url + uri_val
