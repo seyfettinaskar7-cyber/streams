@@ -80,15 +80,20 @@ class VimeoExtractor:
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """re.sub ile base_url oluşturur, '...' ifadelerini temizler, eksik URL'leri tamamlar 
-           ve gerekirse orijinal m3u8_url'deki query parametrelerini ekler."""
+        """Master veya Tekil Kalite (chunklist) m3u8 linklerine göre base_url oluşturur, 
+           re.sub ile '...' kalıntılarını temizler ve eksik URL'leri query parametreleriyle tamamlar."""
         
-        # Orijinal m3u8_url'den query parametrelerini alalım
         parsed_hls = urlparse(hls_url)
-        query_string = parsed_hls.query  # Örn: ?hdnts=exp=...
+        query_string = parsed_hls.query  # Örn: ?_HLS_skip=YES veya ?hdnts=...
         
-        # re.sub ile /avc/hls.m3u8 ve devamını silerek base_url elde etme
-        base_url = re.sub(r'/avc/hls\.m3u8.*$', '/', hls_url)
+        # URL yapısının türüne göre re.sub ile base_url türetme
+        if "chunklist.m3u8" in hls_url:
+            # Tekil kalite yapısı: Dosya adını temizleyip bulunduğu klasörü base_url yapar
+            base_url = re.sub(r'[^/]+$', '', hls_url.split('?')[0])
+        else:
+            # Master/Varsayılan yapı: /avc/hls.m3u8 kısmını siler
+            base_url = re.sub(r'/avc/hls\.m3u8.*$', '/', hls_url)
+            
         print(f"[+] Base URL oluşturuldu: {base_url}")
 
         headers = {
@@ -108,18 +113,18 @@ class VimeoExtractor:
             if not line:
                 continue
             
-            # İçerikteki '...' ifadelerini temizle
-            line = line.replace('...', '')
+            # re.sub ile '...' ifadelerini temizle
+            line = re.sub(r'\.\.\.', '', line)
             
             if line.startswith("#"):
                 # Etiketlerin içinde geçen URI="..." alanlarını kontrol et
                 if 'URI="' in line:
                     def replace_uri(match):
-                        uri_val = match.group(1).replace('...', '')
+                        uri_val = match.group(1)
+                        uri_val = re.sub(r'\.\.\.', '', uri_val)
                         if not uri_val.startswith(("http://", "https://")):
                             uri_val = base_url + uri_val
                         
-                        # ? işareti yoksa ve orijinalde query parametresi varsa ekle
                         if query_string and "?" not in uri_val:
                             uri_val = f"{uri_val}?{query_string}"
                         return f'URI="{uri_val}"'
@@ -131,7 +136,6 @@ class VimeoExtractor:
                 if not line.startswith(("http://", "https://")):
                     line = base_url + line
                 
-                # ? işareti yoksa ve orijinalde query parametresi varsa ekle
                 if query_string and "?" not in line:
                     line = f"{line}?{query_string}"
                     
@@ -228,7 +232,6 @@ if __name__ == "__main__":
     if m3u8_link:
         print(f"\n[M3U8 Linki]:\n{m3u8_link}")
         
-        # M3U8 içeriğini çek, base_url, query ve '...' temizliği kurallarını uygula
         processed_content = extractor.get_processed_playlist(m3u8_link)
         
         if processed_content:
