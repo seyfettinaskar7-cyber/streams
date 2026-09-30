@@ -18,8 +18,18 @@ class VimeoExtractor:
         })
 
     def _clean_url(self, url: str) -> str:
-        """URL yolundaki '../' kalıntılarını imza ve token yapılarını bozmadan güvenle temizler."""
+        """URL üzerindeki kalıntıları temizler, %2F ve %2A karakterlerini re.sub ile dönüştürür."""
+        if not url or url.startswith("#"):
+            return url
+            
+        # '...' kalıntılarını sil
         url = re.sub(r'\.\.\.', '', url)
+        
+        # Kullanıcı isteği: %2F -> / ve %2A -> * dönüşümü
+        if re.search(r'%2F|%2A', url, re.IGNORECASE):
+            url = re.sub(r'%2F', '/', url, flags=re.IGNORECASE)
+            url = re.sub(r'%2A', '*', url, flags=re.IGNORECASE)
+            
         parsed = urlparse(url)
         segments = parsed.path.split('/')
         new_segments = []
@@ -70,7 +80,6 @@ class VimeoExtractor:
 
         print(f"[+] Config URL sağlandı: {config_url}")
         
-        # Config verisini uygun referer ile çek
         config_data = self._get_json_with_referer(config_url, self.url)
 
         # 4. Yöntem: Sayfa kaynağındaki window.playerConfig değişkenini kazıma
@@ -85,7 +94,7 @@ class VimeoExtractor:
             print("[-] Konfigürasyon verilerine ulaşılamadı. Video yayından kalkmış, şifreli veya coğrafi kısıtlı olabilir.")
             return None
 
-        # HLS (m3u8) adresini JSON içerisinden ayıkla (Önce akamai_live altındaki json_url aranır)
+        # HLS (m3u8) adresini JSON içerisinden ayıkla
         try:
             cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
             
@@ -123,13 +132,12 @@ class VimeoExtractor:
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """M3U8 içeriğindeki tüm linkleri temizler, ../ kalıntılarını çözer ve base_url uygular."""
+        """M3U8 içeriğini işler; etiketleri bozmadan yalnızca URL satırlarını ve URI alanlarını temizler."""
         
         hls_url = self._clean_url(hls_url)
         parsed_hls = urlparse(hls_url)
         query_string = parsed_hls.query
         
-        # URL yapısına göre base_url oluşturma (Tekil kalite veya Master)
         if "chunklist.m3u8" in hls_url:
             base_url = re.sub(r'[^/]+$', '', hls_url.split('?')[0])
         else:
@@ -154,9 +162,6 @@ class VimeoExtractor:
             if not line:
                 continue
             
-            # Satırdaki ../ ve ... kalıntılarını güvenle temizle
-            line = self._clean_url(line)
-            
             if line.startswith("#"):
                 if 'URI="' in line:
                     def replace_uri(match):
@@ -173,6 +178,7 @@ class VimeoExtractor:
                     line = re.sub(r'URI="([^"]+)"', replace_uri, line)
                 updated_lines.append(line)
             else:
+                line = self._clean_url(line)
                 if not line.startswith(("http://", "https://")):
                     line = base_url + line
                 
