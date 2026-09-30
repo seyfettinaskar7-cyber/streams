@@ -40,4 +40,4 @@ jobs:
     - name: Değişiklikleri Kaydet ve Gönder (Commit & Push)
       run: |
         git add streams/
-        git diff --quiet && git diff --cached --quiet || (git commit -m "Auto-update bearer.txt via GitHub Actions" && git push)
+        git diff --quiet && git diff --cached --quiet || (git commit -m "update tlcfr link $(date +'%Y-%m-%d %H:%M:%S')" && git push)
