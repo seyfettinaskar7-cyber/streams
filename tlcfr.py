@@ -66,23 +66,39 @@ class VimeoExtractor:
             print("[-] Konfigürasyon verilerine ulaşılamadı. Video yayından kalkmış, şifreli veya coğrafi kısıtlı olabilir.")
             return None
 
-        # HLS (m3u8) adresini JSON içerisinden ayıkla (Önce akamai_live altındaki json_url aranır)
+        # HLS (m3u8) adresini JSON içerisinden ayıkla (json_url öncelikli)
         try:
             cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
-            
-            # En başta akamai_live içinden json_url arama
-            if "akamai_live" in cdns:
-                json_url = cdns["akamai_live"].get("json_url")
-                if json_url:
-                    print("[+] Başarılı! akamai_live altından json_url bulundu.")
-                    return re.sub(r'\.\.\.', '', json_url)
-
-            # Bulunamazsa diğer CDN ve URL'leri tara
             for cdn_name, cdn_info in cdns.items():
-                hls_url = cdn_info.get("json_url") or cdn_info.get("url")
+                json_url = cdn_info.get("json_url")
+                if json_url:
+                    json_url = re.sub(r'\.\.\.', '', json_url)
+                    print(f"[*] json_url bulundu ({cdn_name}), içerik indiriliyor...")
+                    
+                    m3u8_response = self.session.get(json_url, headers={"Referer": self.url}, timeout=10)
+                    if m3u8_response.status_code == 200:
+                        m3u8_json_content = m3u8_response.json()
+                        
+                        # m3u8_json_content içerisinden url arama
+                        m3u8_url = m3u8_json_content.get("url") or m3u8_json_content.get("hls_url")
+                        if not m3u8_url and isinstance(m3u8_json_content, dict):
+                            for k, v in m3u8_json_content.items():
+                                if isinstance(v, str) and (".m3u8" in v or "http" in v):
+                                    m3u8_url = v
+                                    break
+                        
+                        if m3u8_url:
+                            m3u8_url = re.sub(r'\.\.\.', '', m3u8_url)
+                            print(f"[+] Başarılı! m3u8_url json_url içeriğinden yakalandı.")
+                            return m3u8_url
+
+                # Eğer json_url yoksa veya başarısızsa standart 'url' alanına bak
+                hls_url = cdn_info.get("url")
                 if hls_url:
-                    print(f"[+] Başarılı! CDN: {cdn_name}")
-                    return re.sub(r'\.\.\.', '', hls_url)
+                    hls_url = re.sub(r'\.\.\.', '', hls_url)
+                    print(f"[+] Başarılı! CDN (url): {cdn_name}")
+                    return hls_url
+                    
         except Exception as e:
             print(f"[-] HLS verisi işlenirken hata oluştu: {e}")
 
