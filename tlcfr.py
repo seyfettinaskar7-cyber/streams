@@ -80,7 +80,13 @@ class VimeoExtractor:
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """re.sub ile base_url oluşturur, URI ve # dışındaki satırlarda eksik URL'leri tamamlar."""
+        """re.sub ile base_url oluşturur, '...' ifadelerini temizler, eksik URL'leri tamamlar 
+           ve gerekirse orijinal m3u8_url'deki query parametrelerini ekler."""
+        
+        # Orijinal m3u8_url'den query parametrelerini alalım
+        parsed_hls = urlparse(hls_url)
+        query_string = parsed_hls.query  # Örn: ?hdnts=exp=...
+        
         # re.sub ile /avc/hls.m3u8 ve devamını silerek base_url elde etme
         base_url = re.sub(r'/avc/hls\.m3u8.*$', '/', hls_url)
         print(f"[+] Base URL oluşturuldu: {base_url}")
@@ -102,20 +108,33 @@ class VimeoExtractor:
             if not line:
                 continue
             
+            # İçerikteki '...' ifadelerini temizle
+            line = line.replace('...', '')
+            
             if line.startswith("#"):
                 # Etiketlerin içinde geçen URI="..." alanlarını kontrol et
                 if 'URI="' in line:
                     def replace_uri(match):
-                        uri_val = match.group(1)
+                        uri_val = match.group(1).replace('...', '')
                         if not uri_val.startswith(("http://", "https://")):
                             uri_val = base_url + uri_val
+                        
+                        # ? işareti yoksa ve orijinalde query parametresi varsa ekle
+                        if query_string and "?" not in uri_val:
+                            uri_val = f"{uri_val}?{query_string}"
                         return f'URI="{uri_val}"'
+                    
                     line = re.sub(r'URI="([^"]+)"', replace_uri, line)
                 updated_lines.append(line)
             else:
                 # # ile başlamayan segment/alt playlist satırlarında http/https kontrolü
                 if not line.startswith(("http://", "https://")):
                     line = base_url + line
+                
+                # ? işareti yoksa ve orijinalde query parametresi varsa ekle
+                if query_string and "?" not in line:
+                    line = f"{line}?{query_string}"
+                    
                 updated_lines.append(line)
 
         return "\n".join(updated_lines)
@@ -209,7 +228,7 @@ if __name__ == "__main__":
     if m3u8_link:
         print(f"\n[M3U8 Linki]:\n{m3u8_link}")
         
-        # Sınıf içerisindeki metot ile m3u8 içeriğini çek, base_url uygula ve düzenle
+        # M3U8 içeriğini çek, base_url, query ve '...' temizliği kurallarını uygula
         processed_content = extractor.get_processed_playlist(m3u8_link)
         
         if processed_content:
