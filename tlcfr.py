@@ -49,49 +49,65 @@ class VimeoExtractor:
             print("[-] Hiçbir şekilde Config URL oluşturulamadı.")
             return None
 
+        # Eğer config_url içinde cdn geçiyorsa ve istenirse parametre eklenebilir veya ham metin taranabilir
+        if "cdn=" in config_url and "json=1" not in config_url:
+            config_url = config_url.replace("cdn=", "json=1&cdn=")
+
         print(f"[+] Config URL sağlandı: {config_url}")
         
-        # Config verisini uygun referer ile çek
-        config_data = self._get_json_with_referer(config_url, self.url)
-
-        # 4. Yöntem: Sayfa kaynağındaki window.playerConfig değişkenini kazıma
-        if not config_data:
-            print("[*] JSON doğrudan alınamadı, sayfa kaynağı (window.playerConfig) taranıyor...")
-            video_id = self._get_video_id()
-            if video_id:
-                player_page = f"https://player.vimeo.com/video/{video_id}"
-                config_data = self._get_config_from_html(player_page)
-
-        if not config_data:
-            print("[-] Konfigürasyon verilerine ulaşılamadı. Video yayından kalkmış, şifreli veya coğrafi kısıtlı olabilir.")
-            return None
-
-        # HLS (m3u8) adresini JSON içerisinden ayıkla
+        # Config isteği atıp ham metin (response.text) üzerinden regex ile m3u8 yakalama
         try:
-            cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
-            for cdn_name, cdn_info in cdns.items():
-                hls_url = cdn_info.get("url")
-                if hls_url:
-                    print(f"[+] Başarılı! CDN: {cdn_name}")
+            headers = {"Referer": self.url}
+            res = self.session.get(config_url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                raw_text = res.text
+                
+                # Regex ile https:// ile başlayıp .m3u8 (ve opsiyonel query parametreleri) ile biten URL'yi bul
+                # '...' kalıntıları varsa temizle
+                raw_text = re.sub(r'\.\.\.', '', raw_text)
+                
+                m3u8_match = re.search(r'(https?://[^\s<>"]+?\.m3u8[^\s<>"]*)', raw_text)
+                if m3u8_match:
+                    hls_url = m3u8_match.group(1)
+                    # Escape karakterlerini temizle (örn: \/ -> /)
+                    hls_url = hls_url.replace(r'\/', '/')
+                    print(f"[+] Regex ile M3U8 URL'si başarıyla yakalandı!")
                     return hls_url
         except Exception as e:
-            print(f"[-] HLS verisi işlenirken hata oluştu: {e}")
+            print(f"[-] Config çekilirken hata oluştu: {e}")
 
+        # Fallback: Sayfa kaynağındaki window.playerConfig değişkenini kazıma
+        print("[*] Doğrudan arama başarısız, sayfa kaynağı (window.playerConfig) taranıyor...")
+        video_id = self._get_video_id()
+        if video_id:
+            player_page = f"https://player.vimeo.com/video/{video_id}"
+            try:
+                res = self.session.get(player_page, timeout=10)
+                if res.status_code == 200:
+                    page_text = re.sub(r'\.\.\.', '', res.text)
+                    m3u8_match = re.search(r'(https?://[^\s<>"]+?\.m3u8[^\s<>"]*)', page_text)
+                    if m3u8_match:
+                        hls_url = m3u8_match.group(1).replace(r'\/', '/')
+                        return hls_url
+            except Exception:
+                pass
+
+        print("[-] M3U8 adresi hiçbir yöntemle bulunamadı.")
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """re.sub ile m3u8_url içindeki '...' kalıntılarını temizler, 
-           master veya tekil kalite (chunklist.m3u8) yapısına göre base_url türetir."""
+        """re.sub ile '...' kalıntılarını boşluk bırakmadan temizler, 
+           master veya tekil kalite yapılarına göre base_url türetir."""
         
-        # 1. re.sub ile hls_url içindeki olası '...' kalıntılarını temizle
+        # re.sub ile hls_url içindeki '...' kalıntılarını tamamen boş bırakarak (boşluksuz) temizle
         hls_url = re.sub(r'\.\.\.', '', hls_url)
         
         parsed_hls = urlparse(hls_url)
-        query_string = parsed_hls.query  # Örn: ?_HLS_skip=YES veya query parametreleri
+        query_string = parsed_hls.query  # Query parametreleri
         
-        # 2. re.sub ve regex ile url yapısına göre base_url oluşturma
+        # URL yapısına göre base_url oluşturma (Tekil kalite veya Master)
         if "chunklist.m3u8" in hls_url:
-            # Tekil kalite yapısı (örn: .../avc/720p/chunklist.m3u8 -> base_url: .../avc/720p/)
+            # Tekil kalite (örn: .../avc/720p/chunklist.m3u8 -> base_url: .../avc/720p/)
             base_url = re.sub(r'[^/]+$', '', hls_url.split('?')[0])
         else:
             # Master yapı (örn: .../avc/hls.m3u8 -> base_url: .../avc/)
@@ -116,11 +132,10 @@ class VimeoExtractor:
             if not line:
                 continue
             
-            # İçerikteki '...' ifadelerini re.sub ile temizle
+            # İçerikteki '...' kalıntılarını boşluk bırakmadan temizle
             line = re.sub(r'\.\.\.', '', line)
             
             if line.startswith("#"):
-                # Etiketlerin içinde geçen URI="..." alanlarını kontrol et ve temizle
                 if 'URI="' in line:
                     def replace_uri(match):
                         uri_val = match.group(1)
@@ -135,7 +150,6 @@ class VimeoExtractor:
                     line = re.sub(r'URI="([^"]+)"', replace_uri, line)
                 updated_lines.append(line)
             else:
-                # # ile başlamayan segment/alt playlist satırlarında http/https kontrolü
                 if not line.startswith(("http://", "https://")):
                     line = base_url + line
                 
@@ -205,27 +219,6 @@ class VimeoExtractor:
             if part.isdigit():
                 return part
         return path_parts[-1]
-
-    def _get_json_with_referer(self, url, referer_url):
-        try:
-            headers = {"Referer": referer_url}
-            res = self.session.get(url, headers=headers, timeout=10)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            pass
-        return None
-
-    def _get_config_from_html(self, url):
-        try:
-            res = self.session.get(url, timeout=10)
-            if res.status_code == 200:
-                match = re.search(r"^\s*window\.playerConfig\s*=\s*(?P<json>{.+?})\s*;?", res.text, re.MULTILINE)
-                if match:
-                    return json.loads(match.group("json"))
-        except Exception:
-            pass
-        return None
 
 if __name__ == "__main__":
     vimeo_url = "https://vimeo.com/event/3889697"
