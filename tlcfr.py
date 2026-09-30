@@ -66,25 +66,23 @@ class VimeoExtractor:
             print("[-] Konfigürasyon verilerine ulaşılamadı. Video yayından kalkmış, şifreli veya coğrafi kısıtlı olabilir.")
             return None
 
-        # HLS (m3u8) adresini JSON içerisinden ayıkla
+        # HLS (m3u8) adresini JSON içerisinden ayıkla (Önce akamai_live altındaki json_url aranır)
         try:
-            # Belirttiğiniz mantık doğrultusunda doğrudan json_content üzerinden yakalama opsiyonu
-            # Bazı yapıalrda json_url doğrudan bulunabilir veya cdns üzerinden alınır:
-            hls_url = config_data.get("json_url", "")
+            cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
             
-            if not hls_url:
-                cdns = config_data.get("request", {}).get("files", {}).get("hls", {}).get("cdns", {})
-                for cdn_name, cdn_info in cdns.items():
-                    hls_url = cdn_info.get("url")
-                    if hls_url:
-                        print(f"[+] Başarılı! CDN: {cdn_name}")
-                        break
-            
-            if hls_url:
-                # '...' kalıntılarını boşluk bırakmadan temizle
-                hls_url = re.sub(r'\.\.\.', '', hls_url)
-                return hls_url
-                
+            # En başta akamai_live içinden json_url arama
+            if "akamai_live" in cdns:
+                json_url = cdns["akamai_live"].get("json_url")
+                if json_url:
+                    print("[+] Başarılı! akamai_live altından json_url bulundu.")
+                    return re.sub(r'\.\.\.', '', json_url)
+
+            # Bulunamazsa diğer CDN ve URL'leri tara
+            for cdn_name, cdn_info in cdns.items():
+                hls_url = cdn_info.get("json_url") or cdn_info.get("url")
+                if hls_url:
+                    print(f"[+] Başarılı! CDN: {cdn_name}")
+                    return re.sub(r'\.\.\.', '', hls_url)
         except Exception as e:
             print(f"[-] HLS verisi işlenirken hata oluştu: {e}")
 
@@ -241,7 +239,6 @@ if __name__ == "__main__":
     if m3u8_link:
         print(f"\n[M3U8 Linki]:\n{m3u8_link}")
         
-        # Sınıf içerisindeki metot ile m3u8 içeriğini çek, base_url uygula ve düzenle
         processed_content = extractor.get_processed_playlist(m3u8_link)
         
         if processed_content:
