@@ -80,18 +80,21 @@ class VimeoExtractor:
         return None
 
     def get_processed_playlist(self, hls_url: str):
-        """Master veya Tekil Kalite (chunklist) m3u8 linklerine göre base_url oluşturur, 
-           re.sub ile '...' kalıntılarını temizler ve eksik URL'leri query parametreleriyle tamamlar."""
+        """re.sub ile m3u8_url içindeki '...' kalıntılarını temizler, 
+           master veya tekil kalite (chunklist.m3u8) yapısına göre base_url türetir."""
+        
+        # 1. re.sub ile hls_url içindeki olası '...' kalıntılarını temizle
+        hls_url = re.sub(r'\.\.\.', '', hls_url)
         
         parsed_hls = urlparse(hls_url)
-        query_string = parsed_hls.query  # Örn: ?_HLS_skip=YES veya ?hdnts=...
+        query_string = parsed_hls.query  # Örn: ?_HLS_skip=YES veya query parametreleri
         
-        # URL yapısının türüne göre re.sub ile base_url türetme
+        # 2. re.sub ve regex ile url yapısına göre base_url oluşturma
         if "chunklist.m3u8" in hls_url:
-            # Tekil kalite yapısı: Dosya adını temizleyip bulunduğu klasörü base_url yapar
+            # Tekil kalite yapısı (örn: .../avc/720p/chunklist.m3u8 -> base_url: .../avc/720p/)
             base_url = re.sub(r'[^/]+$', '', hls_url.split('?')[0])
         else:
-            # Master/Varsayılan yapı: /avc/hls.m3u8 kısmını siler
+            # Master yapı (örn: .../avc/hls.m3u8 -> base_url: .../avc/)
             base_url = re.sub(r'/avc/hls\.m3u8.*$', '/', hls_url)
             
         print(f"[+] Base URL oluşturuldu: {base_url}")
@@ -113,11 +116,11 @@ class VimeoExtractor:
             if not line:
                 continue
             
-            # re.sub ile '...' ifadelerini temizle
+            # İçerikteki '...' ifadelerini re.sub ile temizle
             line = re.sub(r'\.\.\.', '', line)
             
             if line.startswith("#"):
-                # Etiketlerin içinde geçen URI="..." alanlarını kontrol et
+                # Etiketlerin içinde geçen URI="..." alanlarını kontrol et ve temizle
                 if 'URI="' in line:
                     def replace_uri(match):
                         uri_val = match.group(1)
