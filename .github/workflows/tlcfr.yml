@@ -3,7 +3,7 @@ name: tlcfr action
 on:
   # Belirli aralıklarla otomatik çalışması için
   schedule:
-    - cron: '*/40 * * * *'
+    - cron: '*/30 * * * *'
   
   # Manuel olarak Actions sekmesinden tetiklenebilmesi için
   workflow_dispatch:
